@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/
+logs/
+
+# AI context files (private)
+CLAUDE.md
+CONTEXT.md
+MEMORY.md

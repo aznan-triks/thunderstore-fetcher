@@ -1,0 +1,14 @@
+services:
+  thunderstore-archive:
+    build: .
+    ports:
+      - "8081:8080"
+    environment:
+      # Lets the app know it's running in a container and display the HOST
+      # path of the output folder (to copy/paste into the file explorer).
+      - IN_DOCKER=1
+      - HOST_DATA_DIR=${HOST_DATA_DIR:-}
+    volumes:
+      - ./data:/app/data
+      - ./templates:/app/templates
+      - ./static:/app/static
