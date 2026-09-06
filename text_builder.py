@@ -11,14 +11,7 @@ Word counting (`count_words`) is shared with grouping (grouping.py) so that the
 per-file split reflects the volume actually exported.
 """
 import re
-from html_builder import remove_images_and_links
-
-# Markdown image: ![alt](url) — removed everywhere (no value in plain text)
-_IMG_RE = re.compile(r'!\[.*?\]\(.*?\)')
-
-
-def _remove_images(md_text: str) -> str:
-    return _IMG_RE.sub('', md_text or "")
+from html_builder import remove_images, remove_images_and_links
 
 
 def count_words(text: str) -> int:
@@ -74,10 +67,10 @@ def build_group_markdown(group_name: str, mods_data: list) -> str:
         out += _meta_lines(mod.get("metadata", {}))
         out.append("")
 
-        readme = _remove_images(mod.get("readme") or "").strip()
+        readme = remove_images(mod.get("readme") or "").strip()
         out += ["## README", "", readme or "_No README available._", ""]
 
-        changelog = _remove_images(mod.get("changelog") or "").strip()
+        changelog = remove_images(mod.get("changelog") or "").strip()
         if changelog:
             out += ["## Changelog", "", changelog, ""]
 

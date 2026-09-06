@@ -7,20 +7,37 @@ from markdown_it import MarkdownIt
 _md = MarkdownIt(options_update={"html": False})
 
 _STRIP_STYLE_TAGS = re.compile(r'<style[^>]*>.*?</style>', re.DOTALL | re.IGNORECASE)
-_STRIP_STYLE_ATTR = re.compile(r"""\s+style\s*=\s*(?:"[^"]*"|'[^']*')""", re.IGNORECASE)
+# Real tags only — escaped readme HTML (&lt;div …&gt;) must never be touched.
+_TAG_RE = re.compile(r'<[^<>]+>')
+# Matches style="…" / style='…' / style=unquotedvalue inside one tag.
+_STYLE_ATTR_IN_TAG = re.compile(
+    r"""\s+style\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE
+)
 
 
 def _sanitize_html(h: str) -> str:
-    """Removes leftover style blocks and style= attributes."""
+    """Removes leftover style blocks and style= attributes from rendered HTML."""
     h = _STRIP_STYLE_TAGS.sub('', h)
-    h = _STRIP_STYLE_ATTR.sub('', h)
+    # Only strip style= attributes from real <tags>; escaped HTML that the
+    # markdown renderer printed as text (&lt;div style="…"&gt;) is left alone.
+    h = _TAG_RE.sub(lambda m: _STYLE_ATTR_IN_TAG.sub('', m.group(0)), h)
     return h
 
 
+# Markdown image: ![alt](url). Single source of truth for image removal,
+# shared by html_builder and text_builder (DRY).
+_IMG_RE = re.compile(r'!\[.*?\]\(.*?\)')
+
+
+def remove_images(md_text: str) -> str:
+    """Removes markdown images (![alt](url)) — useless for archiving/PDF."""
+    return _IMG_RE.sub('', md_text or "")
+
+
 def remove_images_and_links(md_text: str) -> str:
-    md_text = re.sub(r'!\[.*?\]\(.*?\)', '', md_text)
-    md_text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', md_text)
-    return md_text
+    """Removes images and turns links into their plain text label."""
+    md_text = remove_images(md_text)
+    return re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', md_text or "")
 
 
 def _anchor(name: str) -> str:

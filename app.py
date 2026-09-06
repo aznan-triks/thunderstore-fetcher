@@ -13,7 +13,7 @@ from starlette.background import BackgroundTask
 
 from pipeline import JobManager, END_MARKER
 from thunderstore import ThunderstoreClient
-from configs import load_config, save_config
+from configs import load_config, save_config, is_valid_community
 
 BASE_DIR = Path(__file__).parent
 
@@ -24,11 +24,22 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 job_manager = JobManager()
 
 
+def _valid_community_or_400(community: str) -> str:
+    """Rejects community names that could escape their folder/URL (path traversal)."""
+    if not is_valid_community(community):
+        raise HTTPException(
+            400,
+            "Invalid community name — use letters, digits, '.', '_' or '-' "
+            "(Thunderstore slug), max 128 characters.",
+        )
+    return community
+
+
 # ── Single-page app ──────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 # ── Jobs API ─────────────────────────────────────────────────────────────────────
@@ -40,12 +51,13 @@ async def list_jobs():
 
 @app.post("/api/jobs")
 async def create_job(community: str = Form(...), config: str = Form("{}")):
-    if not community:
-        raise HTTPException(400, "Community required")
+    community = _valid_community_or_400(community)
     try:
         config_dict = json.loads(config)
     except json.JSONDecodeError:
         raise HTTPException(400, "Invalid JSON config")
+    if not isinstance(config_dict, dict):
+        raise HTTPException(400, "Config must be a JSON object")
     job_id = job_manager.create(community, config_dict)
     return job_manager.meta(job_id)
 
@@ -61,7 +73,7 @@ async def job_status(job_id: str):
 async def start_job(job_id: str):
     if job_id not in job_manager.jobs:
         raise HTTPException(404, "Job not found")
-    job_manager.start(job_id)
+    await job_manager.start(job_id)
     return {"ok": True}
 
 
@@ -77,7 +89,7 @@ async def pause_job(job_id: str):
 async def resume_job(job_id: str):
     if job_id not in job_manager.jobs:
         raise HTTPException(404, "Job not found")
-    job_manager.resume(job_id)
+    await job_manager.resume(job_id)
     return {"ok": True}
 
 
@@ -93,7 +105,7 @@ async def stop_job(job_id: str):
 async def delete_job(job_id: str):
     if job_id not in job_manager.jobs:
         raise HTTPException(404, "Job not found")
-    job_manager.delete(job_id)
+    await job_manager.delete(job_id)
     return {"ok": True}
 
 
@@ -107,6 +119,10 @@ async def stream_logs(job_id: str, from_pos: int = 0):
     async def _stream():
         pos = from_pos
         while True:
+            if job_id not in job_manager.jobs:
+                # Job deleted mid-stream: end the SSE instead of sending
+                # keep-alives forever for a job that no longer exists.
+                return
             chunk = job_manager.log_slice(job_id, pos)
             for line in chunk:
                 pos += 1
@@ -222,9 +238,12 @@ async def list_communities():
 
 @app.get("/api/communities/{community}/categories")
 async def get_community_categories(community: str):
+    community = _valid_community_or_400(community)
     try:
         async with ThunderstoreClient() as client:
-            cats = await client.get_categories(community)
+            # raise_on_error: a network failure must show up as a 502 in the
+            # UI, not masquerade as "this community has no categories".
+            cats = await client.get_categories(community, raise_on_error=True)
         return [c.get("name") or c.get("slug") or str(c) for c in cats if c]
     except Exception as exc:
         raise HTTPException(502, f"Failed to fetch categories: {exc}")
@@ -234,11 +253,15 @@ async def get_community_categories(community: str):
 
 @app.get("/api/configs/{community}")
 async def get_config(community: str):
+    community = _valid_community_or_400(community)
     return load_config(community)
 
 
 @app.post("/api/configs/{community}")
 async def post_config(community: str, request: Request):
+    community = _valid_community_or_400(community)
     data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Config must be a JSON object")
     save_config(community, data)
     return {"status": "saved"}

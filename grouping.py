@@ -44,6 +44,18 @@ def _split_by_words(mods_list: list, max_words: int) -> list[list]:
     return chunks
 
 
+def _free_name(preferred: str, used: set) -> str:
+    """
+    Returns `preferred` if unused, otherwise `preferred` + "_", "__", … —
+    so two generated names never collapse into the same group key.
+    """
+    name = preferred
+    while name in used:
+        name += "_"
+    used.add(name)
+    return name
+
+
 def smart_grouping(
     mods: list[dict],
     categories: list[str],
@@ -70,13 +82,20 @@ def smart_grouping(
 
     # 3. Split categories that are too large (by word count)
     groups: dict[str, list] = {}
+    # Reserve every real category name up front: a generated part name must
+    # never steal the key of a category that is still to be assigned
+    # (e.g. splitting "Mods" produces "Mods_part1", which could collide with a
+    # real category literally called "Mods_part1"). Collisions used to silently
+    # overwrite one of the two groups, dropping its mods.
+    used: set = set(cat_map)
     for cat, mods_list in sorted_cats:
         chunks = _split_by_words(mods_list, max_words)
         if len(chunks) == 1:
             groups[cat] = chunks[0]
         else:
             for i, chunk in enumerate(chunks, start=1):
-                groups["{}_part{}".format(cat, i)] = chunk
+                name = _free_name("{}_part{}".format(cat, i), used)
+                groups[name] = chunk
 
     # 4. If still > max_groups, keep the LARGEST distinct groups and merge the small ones
     if len(groups) > max_groups:
@@ -91,9 +110,7 @@ def smart_grouping(
                 other_pool.extend(mods_list)
         if other_pool:
             # Avoid overwriting a real category named like the catch-all group
-            overflow_name = _OVERFLOW_GROUP
-            while overflow_name in new_groups:
-                overflow_name += "_"
+            overflow_name = _free_name(_OVERFLOW_GROUP, set(new_groups))
             new_groups[overflow_name] = other_pool
         return new_groups
 
