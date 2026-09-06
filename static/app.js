@@ -2,14 +2,16 @@
 // Modeled on the wiki-archive interface: sidebar (job list) + detail panel
 // filled in dynamically, with no page reload.
 
-// Pipeline steps (mirrors STEPS in pipeline.py — drives the progress bar)
+// Pipeline steps — fallback only; the live steps (labels + markers) come from
+// each job's /api/jobs meta ("steps" field, single source of truth in
+// pipeline.py). Kept in sync by selectJob().
 const STEPS = [
-  { label: "Fetching",   marker: "[1/6]" },
-  { label: "Extraction", marker: "[2/6]" },
-  { label: "Grouping",   marker: "[3/6]" },
-  { label: "Building",   marker: "[4/6]" },
-  { label: "Export",     marker: "[5/6]" },
-  { label: "Done",       marker: "[6/6]" },
+  { id: "fetch",   label: "Fetching",   marker: "[1/6]" },
+  { id: "extract", label: "Extraction", marker: "[2/6]" },
+  { id: "group",   label: "Grouping",   marker: "[3/6]" },
+  { id: "build",   label: "Building",   marker: "[4/6]" },
+  { id: "export",  label: "Export",     marker: "[5/6]" },
+  { id: "copy",    label: "Done",       marker: "[6/6]" },
 ];
 
 const STATUS_LABEL = {
@@ -32,6 +34,7 @@ let selectedId  = null;
 let logStream   = null;
 let currentStep = -1;
 let creatingNew = false;
+let currentSteps = STEPS;  // steps of the selected job (server meta) or fallback
 
 // creation form state
 let currentTags = [];
@@ -44,7 +47,13 @@ setInterval(refresh, 2000);
 
 // ── polling ──────────────────────────────────────────────────────────────────
 async function refresh() {
-  const list = await fetch("/api/jobs").then(r => r.json()).catch(() => []);
+  let list;
+  try {
+    list = await fetch("/api/jobs").then(r => r.json());
+  } catch (err) {
+    console.error("Failed to poll /api/jobs:", err);
+    list = [];
+  }
   allJobs = Object.fromEntries(list.map(j => [j.id, j]));
   renderSidebar();
   if (selectedId && allJobs[selectedId]) updateDetail(allJobs[selectedId]);
@@ -173,7 +182,8 @@ async function populateCommunities() {
     if (!data.length) { select.innerHTML = '<option value="">⚠️ No community</option>'; return; }
     select.innerHTML = data.map(c => `<option value="${esc(c.slug)}">${esc(c.name)}</option>`).join("");
     onCommunityChange();
-  } catch {
+  } catch (err) {
+    console.error("Failed to load communities:", err);
     select.innerHTML = '<option value="">❌ Unable to load</option>';
   }
 }
@@ -197,9 +207,13 @@ async function onCommunityChange() {
   cont.innerHTML = '<p class="tags-hint">Loading categories…</p>';
   blacklist = new Set();
 
+  const fail = (what) => (err) => {
+    console.error(`Failed to load ${what}:`, err);
+    return what === "categories" ? [] : {};
+  };
   const [cats, saved] = await Promise.all([
-    fetch(`/api/communities/${community}/categories`).then(r => r.ok ? r.json() : []).catch(() => []),
-    fetch(`/api/configs/${community}`).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+    fetch(`/api/communities/${community}/categories`).then(r => r.ok ? r.json() : []).catch(fail("categories")),
+    fetch(`/api/configs/${community}`).then(r => r.ok ? r.json() : {}).catch(fail("config")),
   ]);
   currentTags = cats;
   if (saved && Object.keys(saved).length) applyConfig(saved);
@@ -269,10 +283,16 @@ function buildConfig() {
 async function saveCurrentConfig() {
   const community = document.getElementById("community-select").value;
   if (!community) return;
-  await fetch(`/api/configs/${community}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildConfig()),
-  });
+  try {
+    const res = await fetch(`/api/configs/${community}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildConfig()),
+    });
+    if (!res.ok) { toast("Save failed: " + await res.text(), "err"); return; }
+  } catch (err) {
+    toast("Network error: " + err.message, "err");
+    return;
+  }
   const badge = document.getElementById("saved-badge");
   badge.classList.add("show");
   setTimeout(() => badge.classList.remove("show"), 2000);
@@ -310,6 +330,9 @@ function selectJob(id) {
   stopLogStream();
   const job = allJobs[id];
   if (!job) return;
+  // Steps come from the server meta (single source of truth in pipeline.py);
+  // the local constant is only a fallback for jobs that predate it.
+  currentSteps = (Array.isArray(job.steps) && job.steps.length) ? job.steps : STEPS;
   renderFullDetail(job);
   renderSidebar();
   startLogStream(id, 0);
@@ -362,9 +385,12 @@ function updateDetail(job) {
   if (acts)  { acts.innerHTML = buildActions(job); bindActions(job.id); }
   if (sub)   sub.textContent = `${job.files.length} file(s) · created ${relDate(job.created_at)}`;
   if (job.status === "error" && currentStep >= 0) setStep(currentStep, "error");
-  if (files && job.files.length) {
-    files.style.display = "";
-    files.querySelector(".files-grid").innerHTML = buildFiles(job);
+  // Always refresh the files panel: a restart with a clean start empties the
+  // output folder, and stale rows would keep pointing at deleted files.
+  if (files) {
+    files.style.display = job.files.length ? "" : "none";
+    const grid = files.querySelector(".files-grid");
+    if (grid) grid.innerHTML = buildFiles(job);
   }
 }
 
@@ -387,7 +413,7 @@ function bindActions(id) {
 }
 
 function buildSteps() {
-  return STEPS.map((s, i) => `
+  return currentSteps.map((s, i) => `
     <div class="step" id="step-${i}">
       <div class="step-dot">${i + 1}</div>
       <div class="step-lbl">${s.label}</div>
@@ -456,7 +482,19 @@ function toast(msg, kind) {
 
 async function deleteJob(id) {
   if (!confirm("Delete this job and all its data?")) return;
-  await fetch(`/api/jobs/${id}`, { method: "DELETE" });
+  let res;
+  try {
+    res = await fetch(`/api/jobs/${id}`, { method: "DELETE" });
+  } catch (err) {
+    toast("Network error: " + err.message, "err");
+    return;
+  }
+  if (!res.ok) {
+    // Previously the UI always announced "Job deleted" even when the request
+    // failed, silently leaving the job in place.
+    toast("Delete failed: " + (await res.text() || res.status), "err");
+    return;
+  }
   selectedId = null;
   stopLogStream();
   document.getElementById("detail").innerHTML = `
@@ -491,13 +529,13 @@ function appendLog(text) {
   term.appendChild(div);
   term.scrollTop = term.scrollHeight;
 
-  const idx = STEPS.findIndex(s => text.includes(s.marker));
+  const idx = currentSteps.findIndex(s => text.includes(s.marker));
   if (idx !== -1) { currentStep = idx; setStep(idx - 1, "done"); setStep(idx, "active"); }
-  if (text.includes("DONE")) setStep(STEPS.length, "done");
+  if (text.includes("DONE")) setStep(currentSteps.length, "done");
 }
 
 function setStep(active, state) {
-  STEPS.forEach((_, i) => {
+  currentSteps.forEach((_, i) => {
     const el = document.getElementById(`step-${i}`);
     if (!el) return;
     el.classList.remove("active", "done", "error");

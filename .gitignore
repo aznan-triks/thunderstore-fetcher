@@ -4,6 +4,7 @@ __pycache__/
 .env
 data/
 logs/
+.pytest_cache/
 
 # AI context files (private)
 CLAUDE.md
