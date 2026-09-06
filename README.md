@@ -30,6 +30,20 @@ docker compose up -d --build
 Interface at http://localhost:8081. `update.bat`/`update.sh` rebuild and restart the
 container (double-click on Windows).
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt   # adds pytest
+python -m pytest tests/
+```
+
+The suite covers the Thunderstore HTTP client (retries, logging, pagination),
+the markdown/HTML sanitization rules, grouping, config storage and the
+`JobManager` lifecycle (including the delete-while-running and corrupt
+`jobs.json` cases), plus an offline end-to-end pipeline run and the HTTP API.
+Network access is never needed: the client tests inject a mock HTTP
+transport and the pipeline test stubs the Thunderstore client.
+
 ## Configuration
 
 A `.env` file at the root holds the sensitive configuration (not versioned, see `.gitignore`).
