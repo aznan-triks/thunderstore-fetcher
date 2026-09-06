@@ -34,6 +34,20 @@ def test_unique_stems_dedupe_collisions():
     assert stems["c_d"] == "c_d_2"
 
 
+def test_split_part_stem_never_clobbers_reserved_stems():
+    # A group literally called "Mods_part1" exists -> splitting "Mods" must
+    # not produce a file that overwrites it.
+    reserved = {"Mods", "Mods_part1", "Other"}
+    assert p._split_part_stem("Mods", 1, reserved) == "Mods_part1_"
+    assert p._split_part_stem("Mods", 2, reserved) == "Mods_part2"
+    # The claimed name stays reserved for the rest of the run.
+    assert p._split_part_stem("Mods", 1, reserved) == "Mods_part1__"
+    # Unrelated groups keep their plain stems (seeded stems are reserved for
+    # their own future parts, and those parts then stay reserved too).
+    assert p._split_part_stem("Other", 1, reserved) == "Other_part1"
+    assert p._split_part_stem("Other", 1, reserved) == "Other_part1_"
+
+
 def test_cfg_int_clamps_and_logs(caplog):
     assert p._cfg_int({}, "workers_api") == 4          # default
     assert p._cfg_int({"workers_api": 2}, "workers_api") == 2

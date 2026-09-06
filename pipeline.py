@@ -150,6 +150,20 @@ def _unique_stems(group_names: list) -> dict:
     return mapping
 
 
+def _split_part_stem(stem: str, index: int, used: set) -> str:
+    """File stem for PDF split artifact n°`index` of an oversized group.
+
+    Artifacts are named "<stem>_part<index>"; the `used` set holds every stem
+    that must not be clobbered (the other groups of the run). A group
+    literally called "X_part1" must never be overwritten by a part of "X".
+    """
+    name = "{}_part{}".format(stem, index)
+    while name in used:
+        name += "_"
+    used.add(name)
+    return name
+
+
 def _extract_mod(pkg: dict) -> dict | None:
     """Extracts a package's data. Runs in a thread."""
     owner = pkg.get("owner") or ""
@@ -574,6 +588,8 @@ class JobManager:
                 # Sanitized, unique file stems for every group (shared by the
                 # HTML/PDF stage and the md/txt stage).
                 stems = _unique_stems(list(groups))
+                # Split artifacts of an oversized PDF get their names from
+                # used_part_stems, seeded with every group stem (see below).
 
                 # Requested formats (at least one; "pdf" by default if config is empty/invalid)
                 formats = [f for f in (config.get("export_formats") or []) if f in EXPORT_FORMATS]
@@ -630,6 +646,14 @@ class JobManager:
                     workers_pdf = _cfg_int(config, "workers_pdf")
                     sem_pdf     = asyncio.Semaphore(workers_pdf)
                     max_size_mb = _cfg_float(config, "max_size_mb")
+                    # Names claimed by split artifacts (every group's output
+                    # stem is reserved up front, so an artifact can never
+                    # clobber another group's PDF/MD/TXT — e.g. a part of "X"
+                    # won't overwrite a group literally called "X_part1").
+                    # Artifacts of a given group are created sequentially, and
+                    # the pool (workers_pdf) bounds overall parallelism: two
+                    # parts never race for the same name.
+                    used_part_stems: set = set(stems.values())
 
                     async def convert_one(gname: str):
                         async with sem_pdf:
@@ -655,7 +679,7 @@ class JobManager:
                                                 part = Pdf.new()
                                                 for p in pdf.pages[start:start + part_size]:
                                                     part.pages.append(p)
-                                                part.save(str(sd / "{}_part{}.pdf".format(sn, idx + 1)))
+                                                part.save(str(sd / "{}.pdf".format(_split_part_stem(sn, idx + 1, used_part_stems))))
                                         finally:
                                             pdf.close()
                                         pp.unlink()

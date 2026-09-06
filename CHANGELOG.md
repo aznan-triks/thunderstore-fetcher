@@ -78,6 +78,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **pipeline.py**: PDF splitting leaked the source PDF handle if a part
   save failed (`pdf.close()` now in `finally`); job teardown no longer dies
   when the final log flush fails.
+- **pipeline.py**: PDF split artifacts (`X_part1.pdf`, …) could silently
+  overwrite the PDF of a group whose category is literally named `X_part1`;
+  artifact names are now allocated against the full set of group stems
+  (`_split_part_stem`) so a split can never clobber another group's output.
 
 ### Security
 - **app.py / configs.py**: community names were used to build output-folder
